@@ -1,2 +1,2 @@
 # azure-integration
-repository contains azure integration documentation and scripts
+The repository contains Azure integration documentation and scripts
