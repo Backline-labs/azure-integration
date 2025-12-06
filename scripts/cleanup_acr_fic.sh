@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine script location for path resolution
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
 # Load environment parameters
-source ./config/params.sh
-source ./scripts/validate.sh
+source "$PROJECT_ROOT/config/params.sh"
+source "$SCRIPT_DIR/validate.sh"
 
 echo ""
 echo "=== Azure ACR Federated Identity Cleanup ==="

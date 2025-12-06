@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine script location for path resolution
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
 # Load environment parameters
-source ./config/params.sh
-source ./scripts/validate.sh
+source "$PROJECT_ROOT/config/params.sh"
+source "$SCRIPT_DIR/validate.sh"
 
 echo ""
 echo "=== Azure ACR Federated Identity Setup for Backline AI ==="
@@ -32,11 +36,11 @@ if [[ -n "$EXISTING_APP_ID" ]]; then
     APP_ID="$EXISTING_APP_ID"
 
     # Get existing service principal
-    SP_OBJECT_ID=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0].objectId" -o tsv 2>/dev/null || echo "")
+    SP_OBJECT_ID=$(az ad sp show --id $APP_ID --query "id" -o tsv 2>/dev/null || echo "")
 
     if [[ -z "$SP_OBJECT_ID" ]]; then
         echo "Creating Service Principal for existing application..."
-        SP_OBJECT_ID=$(az ad sp create --id "$APP_ID" --query objectId -o tsv)
+        SP_OBJECT_ID=$(az ad sp create --id "$APP_ID" --query "id" -o tsv)
         echo "Service Principal created: $SP_OBJECT_ID"
     else
         echo "Service Principal already exists: $SP_OBJECT_ID"
@@ -50,7 +54,7 @@ else
     echo "Application created: $APP_ID"
 
     echo "Creating Service Principal..."
-    SP_OBJECT_ID=$(az ad sp create --id "$APP_ID" --query objectId -o tsv)
+    SP_OBJECT_ID=$(az ad sp create --id "$APP_ID" --query "id" -o tsv)
     if [[ -z "$SP_OBJECT_ID" ]]; then
         echo "ERROR: Failed to create Service Principal"
         exit 1
@@ -61,7 +65,7 @@ fi
 echo ""
 echo "=== Creating Federated Identity Credential ==="
 EKS_OIDC_ISSUER_URL="https://oidc.eks.$AWS_REGION.amazonaws.com/id/$OIDC_ID"
-FIC_NAME="eks-fic"
+FIC_NAME="Backline-AI-$AWS_REGION"
 
 # Check if FIC already exists
 EXISTING_FIC=$(az ad app federated-credential list --id "$APP_ID" --query "[?name=='$FIC_NAME'].name" -o tsv 2>/dev/null || echo "")
@@ -69,10 +73,9 @@ EXISTING_FIC=$(az ad app federated-credential list --id "$APP_ID" --query "[?nam
 if [[ -n "$EXISTING_FIC" ]]; then
     echo "Federated Identity Credential '$FIC_NAME' already exists, skipping..."
 else
-    if az rest --method POST \
-      --uri "https://graph.microsoft.com/v1.0/applications/$APP_ID/federatedIdentityCredentials" \
-      --headers "Content-Type=application/json" \
-      --body "{
+    if az ad app federated-credential create \
+      --id "$APP_ID" \
+      --parameters "{
         \"name\": \"$FIC_NAME\",
         \"issuer\": \"${EKS_OIDC_ISSUER_URL}\",
         \"subject\": \"system:serviceaccount:${EKS_NAMESPACE}:${EKS_SERVICE_ACCOUNT}\",
