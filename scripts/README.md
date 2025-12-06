@@ -16,7 +16,9 @@ This directory contains scripts for managing Azure integrations with Backline AI
     - [Overview](#overview-1)
     - [Architecture](#architecture)
     - [Required Azure Permissions](#required-azure-permissions)
-    - [add\_backline\_acr\_fic.sh script](#add_backline_acr_ficsh-script)
+    - [Scripts](#scripts)
+      - [add\_backline\_acr\_fic.sh script](#add_backline_acr_ficsh-script)
+      - [cleanup\_acr\_fic.sh script](#cleanup_acr_ficsh-script)
     - [ACR Integration Workflow](#acr-integration-workflow)
       - [Initial Setup](#initial-setup)
       - [Re-running Installation](#re-running-installation)
@@ -92,7 +94,8 @@ graph TD
    - `Owner` OR `User Access Administrator` role on the ACR resource group
    - Required for: Assigning roles to service principals
 
-### add_backline_acr_fic.sh script
+### Scripts 
+#### add_backline_acr_fic.sh script
 
 **Purpose**: Creates Azure AD application, service principal, and federated identity credential for ACR access
 
@@ -153,6 +156,69 @@ Your Azure AD app is ready for OIDC authentication from EKS.
 Save these values from the output:
 - **Tenant ID**: Customer's Azure AD tenant identifier
 - **Application (Client) ID**: Used by Backline AI to authenticate
+
+#### cleanup_acr_fic.sh script
+
+**Purpose**: Removes all Azure resources created by the installation script
+
+**What it does**:
+1. Validates Azure login
+2. Finds the Azure AD application by name
+3. Removes all role assignments from ACR
+4. Removes federated identity credentials
+5. Deletes the service principal
+6. Deletes the Azure AD application registration
+
+**Features**:
+- **Safe deletion**: Requires explicit user confirmation before proceeding
+- **Graceful handling**: Safely handles cases where resources don't exist
+- **Complete cleanup**: Removes all related resources in the correct order
+- **Clear feedback**: Provides detailed output for each deletion step
+
+**Usage**:
+```bash
+# From repository root
+./scripts/cleanup_acr_fic.sh
+```
+
+**Interactive Prompts**:
+- Confirms the application name and asks for `y/n` confirmation before deletion
+
+**Example Output**:
+```bash
+$ ./scripts/cleanup_acr_fic.sh
+
+=== Azure ACR Federated Identity Cleanup ===
+
+Application to remove: BACKLINE-AI-ACR-FIC
+
+Are you sure you want to delete this application and all associated resources? (y/n): y
+
+Found Application ID: 12345678-1234-1234-1234-123456789012
+Found Service Principal: 87654321-4321-4321-4321-210987654321
+
+Removing role assignments...
+  Removed role assignment: /subscriptions/.../providers/Microsoft.Authorization/roleAssignments/...
+  Removed role assignment: /subscriptions/.../providers/Microsoft.Authorization/roleAssignments/...
+
+Removing federated identity credentials...
+  Removed federated credential: 98765432-8765-8765-8765-987654321098
+
+Removing service principal...
+  Service principal deleted
+
+Removing application registration...
+  Application registration deleted
+
+=== Cleanup Complete ===
+
+All resources for 'BACKLINE-AI-ACR-FIC' have been removed.
+```
+
+**When to use**:
+- To completely remove the Backline AI integration from your Azure AD
+- Before re-running the installation with different parameters
+- When the integration is no longer needed
 
 ### ACR Integration Workflow
 
