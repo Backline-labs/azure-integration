@@ -60,7 +60,9 @@ validate_azure_login() {
         log_error "Not logged in to Azure. Run 'az login' first."
         exit 1
     fi
-    log_info "Azure login validated"
+    local sub_name
+    sub_name=$(az account show --query "name" -o tsv)
+    log_info "Azure login validated (subscription: $sub_name)"
 }
 
 validate_acr_exists() {
@@ -172,10 +174,12 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --acr)
+                [[ $# -lt 2 || "$2" == --* ]] && { log_error "--acr requires a value"; exit 1; }
                 CURRENT_ACR="$2"
                 shift 2
                 ;;
             --rg|--resource-group)
+                [[ $# -lt 2 || "$2" == --* ]] && { log_error "--rg requires a value"; exit 1; }
                 local rg="$2"
                 if [[ -n "$CURRENT_ACR" ]]; then
                     # Expand space-delimited ACR names
@@ -235,19 +239,21 @@ main() {
         parse_args "$@"
     fi
     
-    # Validate bulk operations require --yes
-    if [[ "$SUBSCRIPTION_MODE" == true ]] && [[ "$YES_FLAG" != true ]]; then
-        log_error "Subscription-wide operation requires --yes flag"
-        exit 1
-    fi
-    
-    if [[ ${#ACR_NAMES[@]} -gt 1 ]] && [[ "$YES_FLAG" != true ]]; then
-        # Check if this came from RG-only mode (bulk)
-        local unique_rgs
-        unique_rgs=$(printf '%s\n' "${RESOURCE_GROUPS[@]}" | sort -u | wc -l)
-        if [[ $unique_rgs -eq 1 ]] && [[ ${#ACR_NAMES[@]} -gt 3 ]]; then
-            log_error "Bulk operations (resource group-wide) require --yes flag"
+    # Validate bulk operations require --yes (unless dry-run)
+    if [[ "$DRY_RUN" != true ]]; then
+        if [[ "$SUBSCRIPTION_MODE" == true ]] && [[ "$YES_FLAG" != true ]]; then
+            log_error "Subscription-wide operation requires --yes flag"
             exit 1
+        fi
+        
+        if [[ ${#ACR_NAMES[@]} -gt 1 ]] && [[ "$YES_FLAG" != true ]]; then
+            # Check if this came from RG-only mode (bulk)
+            local unique_rgs
+            unique_rgs=$(printf '%s\n' "${RESOURCE_GROUPS[@]}" | sort -u | wc -l)
+            if [[ $unique_rgs -eq 1 ]] && [[ ${#ACR_NAMES[@]} -gt 3 ]]; then
+                log_error "Bulk operations (resource group-wide) require --yes flag"
+                exit 1
+            fi
         fi
     fi
     
