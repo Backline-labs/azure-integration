@@ -146,6 +146,7 @@ interactive_mode() {
             read -rp "Enter Resource Group: " rg_input
             read -rp "This will add all ACRs in '$rg_input'. Continue? (y/n): " confirm
             [[ "$confirm" != "y"* ]] && { echo "Cancelled."; exit 0; }
+            YES_FLAG=true  # User confirmed interactively
             
             local acrs
             acrs=$(discover_acrs_in_rg "$rg_input")
@@ -162,6 +163,7 @@ interactive_mode() {
             read -rp "This will add ALL ACRs in the subscription. Continue? (y/n): " confirm
             [[ "$confirm" != "y"* ]] && { echo "Cancelled."; exit 0; }
             SUBSCRIPTION_MODE=true
+            YES_FLAG=true  # User confirmed interactively
             ;;
         *)
             log_error "Invalid choice"
