@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backline AI ACR Integration - Cleanup Script
-# Removes service principal or specific ACR permissions
+# Backline AI Azure Integration - Cleanup Script
+# Removes service principal or specific ACR/Cloud permissions
 
 readonly BACKLINE_APP_ID="3fc75f55-e53f-4950-9127-665106cded58"
 
 # Arrays to collect ACR/RG pairs
 declare -a ACR_NAMES=()
 declare -a RESOURCE_GROUPS=()
+# Arrays to collect subscription IDs for Azure Cloud Reader role removal
+declare -a CLOUD_SUBSCRIPTION_IDS=()
 ALL_MODE=false
 YES_FLAG=false
 DRY_RUN=false
@@ -18,12 +20,17 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Remove Backline AI access from Azure Container Registries.
+Remove Backline AI access from Azure Container Registries and/or Azure Cloud subscriptions.
 
-OPTIONS:
-    --all                     Remove service principal completely (all ACR access)
+ACR OPTIONS:
     --acr <name>              ACR name(s), space-delimited for multiple in same RG
     --rg, --resource-group <name>  Resource group for preceding --acr
+
+AZURE CLOUD OPTIONS:
+    --cloud-sub <id>          Subscription ID to remove Reader role from (repeatable)
+
+GENERAL OPTIONS:
+    --all                     Remove service principal completely (all access)
     --yes                     Skip confirmation for destructive operations
     --dry-run                 Show what would be done without making changes
     -h, --help                Show this help message
@@ -43,6 +50,12 @@ EXAMPLES:
 
     # Remove all ACRs in resource group from integration
     $(basename "$0") --rg mygroup --yes
+
+    # Remove Reader role from Azure Cloud subscription
+    $(basename "$0") --cloud-sub 11111111-1111-1111-1111-111111111111
+
+    # Remove Reader role from multiple subscriptions
+    $(basename "$0") --cloud-sub 11111111-1111-1111-1111-111111111111 --cloud-sub 22222222-2222-2222-2222-222222222222
 
     # Interactive mode
     $(basename "$0")
@@ -67,6 +80,36 @@ validate_azure_login() {
 
 get_sp_object_id() {
     az ad sp show --id "$BACKLINE_APP_ID" --query "id" -o tsv 2>/dev/null || echo ""
+}
+
+validate_guid() {
+    local value=$1
+    local label=$2
+    if [[ ! "$value" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        log_error "Invalid GUID format for $label: $value"
+        return 1
+    fi
+}
+
+remove_reader_role() {
+    local sub_id=$1
+    local scope="/subscriptions/$sub_id"
+
+    local role_id
+    role_id=$(az role assignment list --assignee "$BACKLINE_APP_ID" --scope "$scope" --role "Reader" --query "[0].id" -o tsv 2>/dev/null || echo "")
+
+    if [[ -z "$role_id" ]]; then
+        log_info "No Reader role found on subscription '$sub_id', skipping"
+    else
+        if [[ "$DRY_RUN" == true ]]; then
+            log_dry "Would remove Reader from subscription '$sub_id'"
+        elif az role assignment delete --ids "$role_id" &>/dev/null; then
+            log_success "Removed Reader from subscription '$sub_id'"
+        else
+            log_error "Failed to remove Reader from subscription '$sub_id'"
+            return 1
+        fi
+    fi
 }
 
 discover_acrs_in_rg() {
@@ -150,15 +193,16 @@ remove_all_roles_and_sp() {
 
 interactive_mode() {
     echo ""
-    echo "=== Backline AI ACR Integration Cleanup ==="
+    echo "=== Backline AI Azure Integration Cleanup ==="
     echo ""
     echo "Select mode:"
     echo "  1) Remove specific ACR(s) from integration"
     echo "  2) Remove all ACRs in a resource group from integration"
     echo "  3) Remove service principal completely (removes all access)"
+    echo "  4) Remove Reader role from Azure Cloud subscriptions"
     echo ""
-    read -rp "Choice [1-3]: " choice
-    
+    read -rp "Choice [1-4]: " choice
+
     case $choice in
         1)
             read -rp "Enter ACR name(s) (space-delimited): " acr_input
@@ -173,7 +217,7 @@ interactive_mode() {
             read -rp "This will remove all ACRs in '$rg_input' from integration. Continue? (y/n): " confirm
             [[ "$confirm" != "y"* ]] && { echo "Cancelled."; exit 0; }
             YES_FLAG=true  # User confirmed interactively
-            
+
             local acrs
             acrs=$(discover_acrs_in_rg "$rg_input")
             if [[ -z "$acrs" ]]; then
@@ -186,10 +230,17 @@ interactive_mode() {
             done
             ;;
         3)
-            read -rp "This will DELETE the service principal and ALL ACR access. Continue? (y/n): " confirm
+            read -rp "This will DELETE the service principal and ALL access. Continue? (y/n): " confirm
             [[ "$confirm" != "y"* ]] && { echo "Cancelled."; exit 0; }
             ALL_MODE=true
             YES_FLAG=true  # User confirmed interactively
+            ;;
+        4)
+            read -rp "Enter Subscription ID(s) (space-delimited): " sub_input
+            for sub_id in $sub_input; do
+                validate_guid "$sub_id" "subscription ID" || exit 1
+                CLOUD_SUBSCRIPTION_IDS+=("$sub_id")
+            done
             ;;
         *)
             log_error "Invalid choice"
@@ -235,6 +286,12 @@ parse_args() {
                 fi
                 shift 2
                 ;;
+            --cloud-sub)
+                [[ $# -lt 2 || "$2" == --* ]] && { log_error "--cloud-sub requires a subscription ID"; exit 1; }
+                validate_guid "$2" "subscription ID" || exit 1
+                CLOUD_SUBSCRIPTION_IDS+=("$2")
+                shift 2
+                ;;
             --yes)
                 YES_FLAG=true
                 shift
@@ -252,7 +309,7 @@ parse_args() {
                 ;;
         esac
     done
-    
+
     # Check for unpaired --acr
     if [[ -n "$CURRENT_ACR" ]]; then
         log_error "--acr requires a following --rg"
@@ -297,22 +354,32 @@ main() {
     echo ""
     
     if [[ "$ALL_MODE" == true ]]; then
-        log_info "Removing service principal and all ACR access..."
+        log_info "Removing service principal and all access..."
         remove_all_roles_and_sp
     else
-        if [[ ${#ACR_NAMES[@]} -eq 0 ]]; then
-            log_error "No ACRs specified. Use --acr/--rg or --all"
+        if [[ ${#ACR_NAMES[@]} -eq 0 ]] && [[ ${#CLOUD_SUBSCRIPTION_IDS[@]} -eq 0 ]]; then
+            log_error "No ACRs or cloud subscriptions specified. Use --acr/--rg, --cloud-sub, or --all"
             exit 1
         fi
-        
-        log_info "Removing ACR permissions..."
-        for i in "${!ACR_NAMES[@]}"; do
-            local acr="${ACR_NAMES[$i]}"
-            local rg="${RESOURCE_GROUPS[$i]}"
-            remove_acr_role "$acr" "$rg"
-        done
+
+        if [[ ${#ACR_NAMES[@]} -gt 0 ]]; then
+            log_info "Removing ACR permissions..."
+            for i in "${!ACR_NAMES[@]}"; do
+                local acr="${ACR_NAMES[$i]}"
+                local rg="${RESOURCE_GROUPS[$i]}"
+                remove_acr_role "$acr" "$rg"
+            done
+        fi
+
+        if [[ ${#CLOUD_SUBSCRIPTION_IDS[@]} -gt 0 ]]; then
+            echo ""
+            log_info "Removing Azure Cloud permissions (Reader role)..."
+            for sub_id in "${CLOUD_SUBSCRIPTION_IDS[@]}"; do
+                remove_reader_role "$sub_id"
+            done
+        fi
     fi
-    
+
     echo ""
     log_success "Cleanup complete"
 }

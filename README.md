@@ -9,16 +9,33 @@ Scripts for integrating Backline AI with Azure services.
 Grant Backline AI access to pull images from your ACRs.
 
 ```bash
-cd scripts/acr
+cd scripts/azure
 
 # Add single ACR
-./install_acr_integration.sh --acr myacr --rg mygroup
+./install_azure_integration.sh --acr myacr --rg mygroup
 
 # Remove access
-./cleanup_acr_integration.sh --acr myacr --rg mygroup
+./cleanup_azure_integration.sh --acr myacr --rg mygroup
 ```
 
-See [scripts/acr/README.md](scripts/acr/README.md) for full documentation.
+### Azure Cloud
+
+Grant Backline AI read-only access to your Azure subscriptions for runtime asset analysis (exploitability assessment).
+
+```bash
+cd scripts/azure
+
+# Grant Reader role on a subscription
+./install_azure_integration.sh --cloud-sub <subscription-id>
+
+# Grant Reader role on multiple subscriptions
+./install_azure_integration.sh --cloud-sub <sub-id-1> --cloud-sub <sub-id-2>
+
+# Remove Reader role
+./cleanup_azure_integration.sh --cloud-sub <subscription-id>
+```
+
+See [scripts/azure/README.md](scripts/azure/README.md) for full documentation.
 
 ## Prerequisites
 
