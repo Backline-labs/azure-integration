@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Backline AI Azure Integration - Install Script
-# Creates service principal and grants AcrPull and/or Reader permissions
+# Creates service principal and grants AcrPull, Reader, and/or AKS RBAC Reader permissions
 
 readonly BACKLINE_APP_ID="3fc75f55-e53f-4950-9127-665106cded58"
 
@@ -11,8 +11,11 @@ declare -a ACR_NAMES=()
 declare -a RESOURCE_GROUPS=()
 # Arrays to collect subscription IDs for Azure Cloud Reader role
 declare -a CLOUD_SUBSCRIPTION_IDS=()
+# Arrays to collect subscription IDs for AKS RBAC Reader role
+declare -a AKS_SUBSCRIPTION_IDS=()
 SUBSCRIPTION_MODE=false
 YES_FLAG=false
+AKS_ALL=false
 DRY_RUN=false
 CURRENT_ACR=""
 
@@ -29,6 +32,13 @@ ACR OPTIONS:
 
 AZURE CLOUD OPTIONS:
     --cloud-sub <id>          Subscription ID to grant Reader role (repeatable)
+
+AKS OPTIONS:
+    --aks-sub <id>            Subscription ID to grant AKS RBAC Reader on clusters (repeatable)
+                              Prompts per cluster unless --aks-all is passed.
+                              Requires Azure RBAC for Kubernetes to be enabled on each cluster.
+                              To enable: az aks update --resource-group <rg> --name <name> --enable-azure-rbac
+    --aks-all                 Grant access to all clusters without prompting per cluster
 
 GENERAL OPTIONS:
     --yes                     Skip confirmation for bulk operations
@@ -59,6 +69,18 @@ EXAMPLES:
 
     # Both ACR and Azure Cloud
     $(basename "$0") --acr myacr --rg mygroup --cloud-sub 11111111-1111-1111-1111-111111111111
+
+    # AKS - prompt per cluster (select which ones to include)
+    $(basename "$0") --aks-sub 11111111-1111-1111-1111-111111111111
+
+    # AKS - grant access to all clusters without prompting
+    $(basename "$0") --aks-sub 11111111-1111-1111-1111-111111111111 --aks-all
+
+    # AKS - multiple subscriptions, all clusters
+    $(basename "$0") --aks-sub 11111111-1111-1111-1111-111111111111 --aks-sub 22222222-2222-2222-2222-222222222222 --aks-all
+
+    # Azure Cloud Reader + AKS access together
+    $(basename "$0") --cloud-sub 11111111-1111-1111-1111-111111111111 --aks-sub 11111111-1111-1111-1111-111111111111
 
     # Interactive mode
     $(basename "$0")
@@ -157,6 +179,68 @@ assign_reader_role() {
     fi
 }
 
+assign_aks_rbac_reader() {
+    local sub_id=$1
+
+    log_info "Switching to subscription '$sub_id'..."
+    if ! az account set --subscription "$sub_id" &>/dev/null; then
+        log_error "Failed to switch to subscription '$sub_id'"
+        return 1
+    fi
+
+    local clusters
+    clusters=$(az aks list --query "[].id" -o tsv 2>/dev/null || echo "")
+
+    if [[ -z "$clusters" ]]; then
+        log_info "No AKS clusters found in subscription '$sub_id'"
+        return 0
+    fi
+
+    # Print cluster list so the user knows what was found
+    echo ""
+    log_info "Found clusters in subscription '$sub_id':"
+    while IFS= read -r aks_id; do
+        [[ -z "$aks_id" ]] && continue
+        echo "    - $(echo "$aks_id" | awk -F'/' '{print $NF}') ($(echo "$aks_id" | awk -F'/' '{print $5}'))"
+    done <<< "$clusters"
+    echo ""
+
+    while IFS= read -r aks_id; do
+        [[ -z "$aks_id" ]] && continue
+
+        local cluster_name rg
+        cluster_name=$(echo "$aks_id" | awk -F'/' '{print $NF}')
+        rg=$(echo "$aks_id" | awk -F'/' '{print $5}')
+
+        # Per-cluster confirmation unless --aks-all was passed
+        if [[ "$AKS_ALL" != true && "$DRY_RUN" != true ]]; then
+            read -rp "Grant AKS RBAC Reader access to '$cluster_name' (resource group: $rg)? (y/n): " confirm </dev/tty
+            [[ "$confirm" != "y"* ]] && { log_info "Skipping '$cluster_name'"; continue; }
+        fi
+
+        # Verify Azure RBAC for Kubernetes is enabled on the cluster
+        local rbac_enabled
+        rbac_enabled=$(az aks show --resource-group "$rg" --name "$cluster_name" --query "aadProfile.enableAzureRbac" -o tsv 2>/dev/null || echo "")
+        if [[ "$(echo "$rbac_enabled" | tr '[:upper:]' '[:lower:]')" != "true" ]]; then
+            log_error "Cluster '$cluster_name' does not have Azure RBAC for Kubernetes enabled. Run: az aks update --resource-group $rg --name $cluster_name --enable-azure-rbac"
+            continue
+        fi
+
+        # Check if role already assigned
+        if az role assignment list --assignee "$BACKLINE_APP_ID" --scope "$aks_id" --role "Azure Kubernetes Service RBAC Reader" --query "[0].id" -o tsv 2>/dev/null | grep -q .; then
+            log_info "AKS RBAC Reader already assigned on '$cluster_name', skipping"
+        else
+            if [[ "$DRY_RUN" == true ]]; then
+                log_dry "Would assign AKS RBAC Reader on '$cluster_name' ($aks_id)"
+            elif az role assignment create --assignee "$BACKLINE_APP_ID" --role "Azure Kubernetes Service RBAC Reader" --scope "$aks_id" &>/dev/null; then
+                log_success "AKS RBAC Reader granted on '$cluster_name'"
+            else
+                log_error "Failed to assign AKS RBAC Reader on '$cluster_name'"
+            fi
+        fi
+    done <<< "$clusters"
+}
+
 discover_acrs_in_rg() {
     local rg=$1
     az acr list -g "$rg" --query "[].name" -o tsv 2>/dev/null || echo ""
@@ -175,8 +259,9 @@ interactive_mode() {
     echo "  2) All ACRs in a resource group"
     echo "  3) All ACRs in subscription"
     echo "  4) Azure Cloud - Reader role on subscriptions"
+    echo "  5) AKS - Kubernetes RBAC Reader on all clusters in subscriptions"
     echo ""
-    read -rp "Choice [1-4]: " choice
+    read -rp "Choice [1-5]: " choice
 
     case $choice in
         1)
@@ -216,6 +301,15 @@ interactive_mode() {
                 validate_guid "$sub_id" "subscription ID" || exit 1
                 CLOUD_SUBSCRIPTION_IDS+=("$sub_id")
             done
+            ;;
+        5)
+            read -rp "Enter Subscription ID(s) (space-delimited): " sub_input
+            for sub_id in $sub_input; do
+                validate_guid "$sub_id" "subscription ID" || exit 1
+                AKS_SUBSCRIPTION_IDS+=("$sub_id")
+            done
+            read -rp "Grant access to all clusters without prompting per cluster? (y/n): " bulk_confirm
+            [[ "$bulk_confirm" == "y"* ]] && AKS_ALL=true
             ;;
         *)
             log_error "Invalid choice"
@@ -266,6 +360,16 @@ parse_args() {
                 validate_guid "$2" "subscription ID" || exit 1
                 CLOUD_SUBSCRIPTION_IDS+=("$2")
                 shift 2
+                ;;
+            --aks-sub)
+                [[ $# -lt 2 || "$2" == --* ]] && { log_error "--aks-sub requires a subscription ID"; exit 1; }
+                validate_guid "$2" "subscription ID" || exit 1
+                AKS_SUBSCRIPTION_IDS+=("$2")
+                shift 2
+                ;;
+            --aks-all)
+                AKS_ALL=true
+                shift
                 ;;
             --yes)
                 YES_FLAG=true
@@ -330,6 +434,7 @@ main() {
     
     local has_acr=false
     local has_cloud=false
+    local has_aks=false
 
     if [[ "$SUBSCRIPTION_MODE" == true ]] || [[ ${#ACR_NAMES[@]} -gt 0 ]]; then
         has_acr=true
@@ -337,9 +442,12 @@ main() {
     if [[ ${#CLOUD_SUBSCRIPTION_IDS[@]} -gt 0 ]]; then
         has_cloud=true
     fi
+    if [[ ${#AKS_SUBSCRIPTION_IDS[@]} -gt 0 ]]; then
+        has_aks=true
+    fi
 
-    if [[ "$has_acr" != true ]] && [[ "$has_cloud" != true ]]; then
-        log_error "No ACRs or cloud subscriptions specified"
+    if [[ "$has_acr" != true ]] && [[ "$has_cloud" != true ]] && [[ "$has_aks" != true ]]; then
+        log_error "No ACRs, cloud subscriptions, or AKS subscriptions specified"
         exit 1
     fi
 
@@ -374,10 +482,20 @@ main() {
         done
     fi
 
+    if [[ "$has_aks" == true ]]; then
+        echo ""
+        log_info "Processing AKS integrations (Kubernetes RBAC Reader)..."
+
+        for sub_id in "${AKS_SUBSCRIPTION_IDS[@]}"; do
+            assign_aks_rbac_reader "$sub_id"
+        done
+    fi
+
     echo ""
     log_success "Integration complete"
     echo ""
     echo "Backline App ID: $BACKLINE_APP_ID"
+    echo "Service Principal Object ID: $(az ad sp show --id "$BACKLINE_APP_ID" --query id -o tsv 2>/dev/null || echo "N/A")"
     echo "Tenant ID: $(az account show --query tenantId -o tsv)"
 }
 
