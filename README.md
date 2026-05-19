@@ -2,6 +2,20 @@
 
 Scripts for integrating Backline AI with Azure services.
 
+## Prerequisites
+
+- Azure CLI installed and logged in (`az login`)
+- Permission to create service principals in your Entra ID tenant
+- **Owner** or **Role Based Access Control Administrator** at the relevant scope for each integration:
+
+| Integration | Required scope |
+|-------------|---------------|
+| ACR (`--acr`) | ACR resource or its resource group |
+| Azure Cloud (`--cloud-sub`) | Subscription |
+| AKS (`--aks-sub`) | AKS cluster or its resource group |
+
+> These permissions are required to create the role assignments. Backline itself is granted read-only access only.
+
 ## Available Integrations
 
 ### Azure Container Registry (ACR)
@@ -39,6 +53,8 @@ cd scripts/azure
 
 Grant Backline AI read access to Kubernetes resources (pods, deployments, services, etc.) inside your AKS clusters.
 
+> **Required permission:** Owner or Role Based Access Control Administrator on the AKS cluster or its resource group.
+
 > **Prerequisite:** Each cluster must have Azure RBAC for Kubernetes enabled:
 > ```bash
 > az aks update --resource-group <rg> --name <cluster-name> --enable-azure-rbac
@@ -58,14 +74,3 @@ cd scripts/azure
 ```
 
 See [scripts/azure/README.md](scripts/azure/README.md) for full documentation.
-
-## Prerequisites
-
-- Azure CLI installed and logged in (`az login`)
-- Permission to create service principals in your Entra ID tenant
-- **Owner** or **Role Based Access Control Administrator** at the relevant scope for each integration you want to set up:
-  - **ACR** — on the ACR resource or its resource group
-  - **Azure Cloud** — on the subscription
-  - **AKS** — on the AKS cluster or its resource group
-
-> These permissions are only needed by the person *running* the script to create the role assignments. Backline itself is granted read-only access.
