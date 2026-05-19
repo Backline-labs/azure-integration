@@ -2,6 +2,20 @@
 
 Scripts for integrating Backline AI with Azure services.
 
+## Prerequisites
+
+- Azure CLI installed and logged in (`az login`)
+- Permission to create service principals in your Entra ID tenant
+- **Owner** or **Role Based Access Control Administrator** at the relevant scope for each integration:
+
+| Integration | Required scope |
+|-------------|---------------|
+| ACR (`--acr`) | ACR resource or its resource group |
+| Azure Cloud (`--cloud-sub`) | Subscription |
+| AKS (`--aks-sub`) | AKS cluster or its resource group |
+
+> These permissions are required to create the role assignments. Backline itself is granted read-only access only.
+
 ## Available Integrations
 
 ### Azure Container Registry (ACR)
@@ -35,10 +49,28 @@ cd scripts/azure
 ./cleanup_azure_integration.sh --cloud-sub <subscription-id>
 ```
 
+### AKS (Kubernetes)
+
+Grant Backline AI read access to Kubernetes resources (pods, deployments, services, etc.) inside your AKS clusters.
+
+> **Required permission:** Owner or Role Based Access Control Administrator on the AKS cluster or its resource group.
+
+> **Prerequisite:** Each cluster must have Azure RBAC for Kubernetes enabled:
+> ```bash
+> az aks update --resource-group <rg> --name <cluster-name> --enable-azure-rbac
+> ```
+
+```bash
+cd scripts/azure
+
+# Grant access - prompts per cluster to select which ones to include
+./install_azure_integration.sh --aks-sub <subscription-id>
+
+# Grant access to all clusters without prompting
+./install_azure_integration.sh --aks-sub <subscription-id> --aks-all
+
+# Remove access from all clusters in a subscription
+./cleanup_azure_integration.sh --aks-sub <subscription-id>
+```
+
 See [scripts/azure/README.md](scripts/azure/README.md) for full documentation.
-
-## Prerequisites
-
-- Azure CLI installed
-- Logged in to Azure (`az login`)
-- Appropriate permissions to create service principals and assign roles

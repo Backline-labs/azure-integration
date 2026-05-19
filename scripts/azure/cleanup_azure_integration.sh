@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Backline AI Azure Integration - Cleanup Script
-# Removes service principal or specific ACR/Cloud permissions
+# Removes service principal or specific ACR/Cloud/AKS permissions
 
 readonly BACKLINE_APP_ID="3fc75f55-e53f-4950-9127-665106cded58"
 
@@ -11,6 +11,8 @@ declare -a ACR_NAMES=()
 declare -a RESOURCE_GROUPS=()
 # Arrays to collect subscription IDs for Azure Cloud Reader role removal
 declare -a CLOUD_SUBSCRIPTION_IDS=()
+# Arrays to collect subscription IDs for AKS RBAC Reader role removal
+declare -a AKS_SUBSCRIPTION_IDS=()
 ALL_MODE=false
 YES_FLAG=false
 DRY_RUN=false
@@ -28,6 +30,9 @@ ACR OPTIONS:
 
 AZURE CLOUD OPTIONS:
     --cloud-sub <id>          Subscription ID to remove Reader role from (repeatable)
+
+AKS OPTIONS:
+    --aks-sub <id>            Subscription ID to remove AKS RBAC Reader from all clusters (repeatable)
 
 GENERAL OPTIONS:
     --all                     Remove service principal completely (all access)
@@ -56,6 +61,12 @@ EXAMPLES:
 
     # Remove Reader role from multiple subscriptions
     $(basename "$0") --cloud-sub 11111111-1111-1111-1111-111111111111 --cloud-sub 22222222-2222-2222-2222-222222222222
+
+    # Remove AKS RBAC Reader from all clusters in a subscription
+    $(basename "$0") --aks-sub 11111111-1111-1111-1111-111111111111
+
+    # Remove AKS RBAC Reader from multiple subscriptions
+    $(basename "$0") --aks-sub 11111111-1111-1111-1111-111111111111 --aks-sub 22222222-2222-2222-2222-222222222222
 
     # Interactive mode
     $(basename "$0")
@@ -110,6 +121,49 @@ remove_reader_role() {
             return 1
         fi
     fi
+}
+
+remove_aks_rbac_reader() {
+    local sub_id=$1
+
+    log_info "Switching to subscription '$sub_id'..."
+    if ! az account set --subscription "$sub_id" &>/dev/null; then
+        log_error "Failed to switch to subscription '$sub_id'"
+        return 1
+    fi
+
+    local clusters
+    clusters=$(az aks list --query "[].id" -o tsv 2>/dev/null || echo "")
+
+    if [[ -z "$clusters" ]]; then
+        log_info "No AKS clusters found in subscription '$sub_id'"
+        return 0
+    fi
+
+    while IFS= read -r aks_id; do
+        [[ -z "$aks_id" ]] && continue
+
+        local cluster_name
+        cluster_name=$(echo "$aks_id" | awk -F'/' '{print $NF}')
+
+        local role_id
+        role_id=$(az role assignment list --assignee "$BACKLINE_APP_ID" --scope "$aks_id" --role "Azure Kubernetes Service RBAC Reader" --query "[0].id" -o tsv 2>/dev/null || echo "")
+
+        if [[ -z "$role_id" ]]; then
+            log_info "No AKS RBAC Reader role found on '$cluster_name', skipping"
+        else
+            if [[ "$DRY_RUN" == true ]]; then
+                log_dry "Would remove AKS RBAC Reader from '$cluster_name' ($aks_id)"
+            else
+                local delete_error
+                if delete_error=$(az role assignment delete --ids "$role_id" 2>&1); then
+                    log_success "Removed AKS RBAC Reader from '$cluster_name'"
+                else
+                    log_error "Failed to remove AKS RBAC Reader from '$cluster_name': $delete_error"
+                fi
+            fi
+        fi
+    done <<< "$clusters"
 }
 
 discover_acrs_in_rg() {
@@ -200,8 +254,9 @@ interactive_mode() {
     echo "  2) Remove all ACRs in a resource group from integration"
     echo "  3) Remove service principal completely (removes all access)"
     echo "  4) Remove Reader role from Azure Cloud subscriptions"
+    echo "  5) Remove AKS RBAC Reader from all clusters in subscriptions"
     echo ""
-    read -rp "Choice [1-4]: " choice
+    read -rp "Choice [1-5]: " choice
 
     case $choice in
         1)
@@ -240,6 +295,13 @@ interactive_mode() {
             for sub_id in $sub_input; do
                 validate_guid "$sub_id" "subscription ID" || exit 1
                 CLOUD_SUBSCRIPTION_IDS+=("$sub_id")
+            done
+            ;;
+        5)
+            read -rp "Enter Subscription ID(s) (space-delimited): " sub_input
+            for sub_id in $sub_input; do
+                validate_guid "$sub_id" "subscription ID" || exit 1
+                AKS_SUBSCRIPTION_IDS+=("$sub_id")
             done
             ;;
         *)
@@ -290,6 +352,12 @@ parse_args() {
                 [[ $# -lt 2 || "$2" == --* ]] && { log_error "--cloud-sub requires a subscription ID"; exit 1; }
                 validate_guid "$2" "subscription ID" || exit 1
                 CLOUD_SUBSCRIPTION_IDS+=("$2")
+                shift 2
+                ;;
+            --aks-sub)
+                [[ $# -lt 2 || "$2" == --* ]] && { log_error "--aks-sub requires a subscription ID"; exit 1; }
+                validate_guid "$2" "subscription ID" || exit 1
+                AKS_SUBSCRIPTION_IDS+=("$2")
                 shift 2
                 ;;
             --yes)
@@ -357,8 +425,8 @@ main() {
         log_info "Removing service principal and all access..."
         remove_all_roles_and_sp
     else
-        if [[ ${#ACR_NAMES[@]} -eq 0 ]] && [[ ${#CLOUD_SUBSCRIPTION_IDS[@]} -eq 0 ]]; then
-            log_error "No ACRs or cloud subscriptions specified. Use --acr/--rg, --cloud-sub, or --all"
+        if [[ ${#ACR_NAMES[@]} -eq 0 ]] && [[ ${#CLOUD_SUBSCRIPTION_IDS[@]} -eq 0 ]] && [[ ${#AKS_SUBSCRIPTION_IDS[@]} -eq 0 ]]; then
+            log_error "No ACRs, cloud subscriptions, or AKS subscriptions specified. Use --acr/--rg, --cloud-sub, --aks-sub, or --all"
             exit 1
         fi
 
@@ -376,6 +444,14 @@ main() {
             log_info "Removing Azure Cloud permissions (Reader role)..."
             for sub_id in "${CLOUD_SUBSCRIPTION_IDS[@]}"; do
                 remove_reader_role "$sub_id"
+            done
+        fi
+
+        if [[ ${#AKS_SUBSCRIPTION_IDS[@]} -gt 0 ]]; then
+            echo ""
+            log_info "Removing AKS permissions (Kubernetes RBAC Reader)..."
+            for sub_id in "${AKS_SUBSCRIPTION_IDS[@]}"; do
+                remove_aks_rbac_reader "$sub_id"
             done
         fi
     fi
