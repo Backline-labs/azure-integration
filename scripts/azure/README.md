@@ -5,7 +5,16 @@ Scripts to grant Backline AI access to Azure Container Registries, Azure Cloud s
 ## Prerequisites
 
 - Azure CLI installed and logged in (`az login`)
-- Permissions to create service principals and assign roles
+- Permission to create service principals in your Entra ID tenant
+- Permission to assign roles at the relevant scope for each integration:
+
+| Integration | Flag | Required permission | Scope |
+|-------------|------|---------------------|-------|
+| Azure Container Registry | `--acr` | Owner or Role Based Access Control Administrator | ACR resource or its resource group |
+| Azure Cloud | `--cloud-sub` | Owner or Role Based Access Control Administrator | Subscription |
+| AKS | `--aks-sub` | Owner or Role Based Access Control Administrator | AKS cluster or its resource group |
+
+> The script assigns **read-only** roles to Backline. The elevated permission is only required for the person *running* the script in order to create those role assignments. See [Microsoft's documentation](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-steps#step-4-check-your-prerequisites) for details.
 
 ## Scripts
 

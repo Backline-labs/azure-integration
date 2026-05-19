@@ -154,10 +154,13 @@ remove_aks_rbac_reader() {
         else
             if [[ "$DRY_RUN" == true ]]; then
                 log_dry "Would remove AKS RBAC Reader from '$cluster_name' ($aks_id)"
-            elif az role assignment delete --ids "$role_id" &>/dev/null; then
-                log_success "Removed AKS RBAC Reader from '$cluster_name'"
             else
-                log_error "Failed to remove AKS RBAC Reader from '$cluster_name'"
+                local delete_error
+                if delete_error=$(az role assignment delete --ids "$role_id" 2>&1); then
+                    log_success "Removed AKS RBAC Reader from '$cluster_name'"
+                else
+                    log_error "Failed to remove AKS RBAC Reader from '$cluster_name': $delete_error"
+                fi
             fi
         fi
     done <<< "$clusters"

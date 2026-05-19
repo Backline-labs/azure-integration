@@ -232,10 +232,13 @@ assign_aks_rbac_reader() {
         else
             if [[ "$DRY_RUN" == true ]]; then
                 log_dry "Would assign AKS RBAC Reader on '$cluster_name' ($aks_id)"
-            elif az role assignment create --assignee "$BACKLINE_APP_ID" --role "Azure Kubernetes Service RBAC Reader" --scope "$aks_id" &>/dev/null; then
-                log_success "AKS RBAC Reader granted on '$cluster_name'"
             else
-                log_error "Failed to assign AKS RBAC Reader on '$cluster_name'"
+                local assign_error
+                if assign_error=$(az role assignment create --assignee "$BACKLINE_APP_ID" --role "Azure Kubernetes Service RBAC Reader" --scope "$aks_id" 2>&1); then
+                    log_success "AKS RBAC Reader granted on '$cluster_name'"
+                else
+                    log_error "Failed to assign AKS RBAC Reader on '$cluster_name': $assign_error"
+                fi
             fi
         fi
     done <<< "$clusters"

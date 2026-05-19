@@ -61,6 +61,11 @@ See [scripts/azure/README.md](scripts/azure/README.md) for full documentation.
 
 ## Prerequisites
 
-- Azure CLI installed
-- Logged in to Azure (`az login`)
-- Appropriate permissions to create service principals and assign roles
+- Azure CLI installed and logged in (`az login`)
+- Permission to create service principals in your Entra ID tenant
+- **Owner** or **Role Based Access Control Administrator** at the relevant scope for each integration you want to set up:
+  - **ACR** — on the ACR resource or its resource group
+  - **Azure Cloud** — on the subscription
+  - **AKS** — on the AKS cluster or its resource group
+
+> These permissions are only needed by the person *running* the script to create the role assignments. Backline itself is granted read-only access.
